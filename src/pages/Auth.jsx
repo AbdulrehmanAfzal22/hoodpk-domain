@@ -1,0 +1,74 @@
+import {useState} from 'react';
+import {ArrowRight,Eye,EyeOff} from 'lucide-react';
+import {Link,useLocation,useNavigate,useSearchParams} from 'react-router-dom';
+import {supabase,unwrap} from '../lib/supabase';
+import {useAuth} from '../hooks/useAuth';
+import {usePageMetadata} from '../hooks/usePageMetadata';
+import {emailConfirmationUrl,passwordResetUrl,safeReturnTo} from '../lib/authRedirects.mjs';
+import '../styles/auth-page.css';
+export default function Auth(){
+ const [params]=useSearchParams(),nav=useNavigate(),routerLocation=useLocation(),{refresh}=useAuth();
+ const routeMode=routerLocation.pathname==='/register'?'signup':routerLocation.pathname==='/reset-password'?'reset':'login';
+ const requestedMode=params.get('mode'),mode=['signup','forgot','reset'].includes(requestedMode)?requestedMode:routeMode, [busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState(''),[passwordVisible,setPasswordVisible]=useState(false);
+ usePageMetadata({title:({login:'Sign in',signup:'Create an account',forgot:'Reset your password',reset:'Choose a new password'})[mode],description:'Access your the HOOD account and considered beauty collection.',noindex:true});
+ const [confirmationEmail,setConfirmationEmail]=useState('');
+ const [existingAccount,setExistingAccount]=useState(false);
+ const returnTo=safeReturnTo(params.get('returnTo'));
+ async function submit(e){e.preventDefault();setBusy(true);setError('');setMessage('');setConfirmationEmail('');setExistingAccount(false);const f=Object.fromEntries(new FormData(e.currentTarget));
+  try{
+    if(mode==='forgot'){unwrap(await supabase.auth.resetPasswordForEmail(f.email,{redirectTo:passwordResetUrl()}));setMessage('If this address is registered, a reset link will arrive shortly.');}
+   else if(mode==='reset'){unwrap(await supabase.auth.updateUser({password:f.password}));setMessage('Password updated. You can continue to your account.');}
+   else if(mode==='signup'){
+    const {user,session}=unwrap(await supabase.auth.signUp({email:f.email,password:f.password,options:{data:{full_name:f.full_name},emailRedirectTo:emailConfirmationUrl(returnTo)}}));
+    if(session){await refresh();nav(returnTo);}
+    else if(user?.identities?.length===0){setExistingAccount(true);}
+    else {
+     setConfirmationEmail(f.email);
+     setMessage('Check your inbox and spam folder for your HOOD confirmation link.');
+    }
+   }
+   else {unwrap(await supabase.auth.signInWithPassword({email:f.email,password:f.password}));await refresh();nav(returnTo,{replace:true});}
+  }catch(err){
+   if(mode==='login'&&err.code==='email_not_confirmed')setConfirmationEmail(f.email);
+   if(mode==='signup'&&(['user_already_exists','email_exists'].includes(err.code)||err.message==='User already registered')){
+    setExistingAccount(true);
+   }else{setError(err.message);}
+  }finally{setBusy(false);}
+ }
+ async function resendConfirmation(){
+  setBusy(true);setError('');setMessage('');
+  try{
+   unwrap(await supabase.auth.resend({type:'signup',email:confirmationEmail,options:{emailRedirectTo:emailConfirmationUrl(returnTo)}}));
+   setMessage('If this address still needs verification, check your inbox and spam for a new link.');
+  }catch(err){setError(err.message);}
+  finally{setBusy(false);}
+ }
+ return <section className={`auth-page auth-page--premium auth-page--${mode}`}>
+  <div className="auth-art" aria-label="the HOOD beauty collection campaign">
+   <p className="eyebrow auth-art__label">THE THE HOOD BEAUTY EDIT</p>
+   <h1 className="auth-art__title">A little more<br/>you.</h1>
+   <p className="auth-art__note">Beauty for your everyday ritual.</p>
+  </div>
+  <div className="auth-form">
+   <div className="auth-form__inner">
+    <p className="eyebrow auth-form__eyebrow">YOUR PRIVATE BEAUTY EDIT</p>
+    <h1>{({login:'Welcome back.',signup:'Make yourself at home.',forgot:'A fresh start.',reset:'Choose a new password.'})[mode]}</h1>
+    <p className="auth-form__intro">{mode==='login'?'Save your favourites, keep your bag and follow every order.':mode==='signup'?'Create an account to keep your favourites and follow every order.':mode==='forgot'?'We’ll send a secure link if an account matches that email.':'Choose a new password for your the HOOD account.'}</p>
+    <form onSubmit={submit}>
+     {mode==='signup'&&<label htmlFor="auth-full-name">Full name<input id="auth-full-name" className="auth-input" name="full_name" autoComplete="name" maxLength="150" required/></label>}
+     {mode!=='reset'&&<label htmlFor="auth-email">Email address<input id="auth-email" className="auth-input" name="email" type="email" autoComplete="email" required/></label>}
+     {mode!=='forgot'&&<label htmlFor="auth-password">Password<div className="auth-password-field"><input id="auth-password" className="auth-input" name="password" type={passwordVisible?'text':'password'} minLength="8" autoComplete={mode==='login'?'current-password':'new-password'} required/><button type="button" className="auth-password-toggle" onClick={()=>setPasswordVisible(value=>!value)} aria-label={passwordVisible?'Hide password':'Show password'} aria-pressed={passwordVisible}>{passwordVisible?<EyeOff size={17}/>:<Eye size={17}/>}</button></div></label>}
+     {mode==='signup'&&existingAccount&&<div className="notice auth-feedback" role="status">
+      <strong>An account already exists with this email.</strong> Please{' '}
+      <Link to={'/login?returnTo='+encodeURIComponent(returnTo)}>sign in</Link> or use{' '}
+      <Link to="/reset-password?mode=forgot">Forgot password?</Link>
+     </div>}
+     {error&&<p className="error auth-feedback" role="alert">{error}</p>}{message&&<p className="notice auth-feedback" role="status">{message}</p>}
+     <button className="button auth-submit" type="submit" disabled={busy} aria-busy={busy}>{busy?<><span className="auth-submit__spinner" aria-hidden="true"/>Please wait…</>:<>{({login:'Sign in',signup:'Create account',forgot:'Send reset link',reset:'Update password'})[mode]}<ArrowRight size={17}/></>}</button>
+    </form>
+    {confirmationEmail&&["signup","login"].includes(mode)&&<button type="button" className="text-button auth-resend" onClick={resendConfirmation} disabled={busy}>Resend confirmation email</button>}
+    <div className="auth-links">{mode==='login'?<><Link to={'/register?returnTo='+encodeURIComponent(returnTo)}>Create an account</Link><Link to="/reset-password?mode=forgot">Forgot password?</Link></>:<Link to={'/login?returnTo='+encodeURIComponent(returnTo)}>Back to sign in</Link>}{mode==='signup'&&confirmationEmail&&<Link to="/reset-password?mode=forgot">Forgot password?</Link>}</div>
+   </div>
+  </div>
+ </section>;
+}
